@@ -1,0 +1,23 @@
+require 'test/unit'
+require File.dirname(__FILE__) + '/../lib/metrics.rb'
+
+class MetricsUnitTest < Test::Unit::TestCase
+  
+  def test_cpu
+    s = Metrics.new
+    usage = s.getCpuUsage
+    assert(usage > 0)
+    assert(usage <= 100)
+  end
+  
+  def test_memory_usage
+    s = Metrics.new
+    usedMem = s.getMemUsage
+    assert(usedMem > 0)
+  end
+  
+  def test_average_load
+    s = Metrics.new
+    assert_equal(3, s.getLoadAverage.split(" ").count)
+  end
+end
