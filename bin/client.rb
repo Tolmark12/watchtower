@@ -34,6 +34,23 @@ class WatchTowerClient < Daemon::Base
     
     def connect_to_server(server_ip, server_port)
       @socket = TCPSocket.open(server_ip,server_port)
+      
+      #listener listens to the server, can listen for certain messages
+      @listener = Thread.new {
+        while true
+          line = @socket.gets
+          
+          # if line is empty that means that the server disconnected
+          if !line
+            @log.puts "Server went down"
+            WatchTowerClient.kill_self
+            break
+          end
+          @log.puts "Message from server #{line}"
+        end
+      }
+      
+      # send info about this client to the server # of cpu's etc
       @socket.puts "info|1|123"
       @log.puts "===START=== #{server_ip}: #{server_port}"
       @log.flush
@@ -46,7 +63,6 @@ class WatchTowerClient < Daemon::Base
     end
     
     def disconnect_from_server
-      @socket.puts "stop"
       @socket.close
       @log.puts "===STOP==="
       @log.close

@@ -11,6 +11,10 @@ module Daemon
     def self.daemonize
       Controller.daemonize(self)
     end
+    
+    def self.kill_self
+      Controller.stop(self)
+    end
   end
   
   module PidFile
