@@ -1,3 +1,5 @@
+#!/usr/bin/env ruby
+
 require File.dirname(__FILE__) + '/../lib/metrics.rb'
 require File.dirname(__FILE__) + '/../lib/daemon.rb'
 require File.dirname(__FILE__) + '/../lib/parseconfig.rb'
