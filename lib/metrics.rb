@@ -1,20 +1,12 @@
+require File.dirname(__FILE__) + '/../lib/parseconfig.rb'
 class Metrics
-  def get_cpu_usage
-    cmd = %x[ps aux|awk 'NR > 0 { s +=$3 }; END {print s}']
-    cmd.to_i
+  WorkingDirectory = File.expand_path(File.dirname(__FILE__))  
+  
+  def initialize
+    @conf = ParseConfig.new(WorkingDirectory + '/../etc/metrics.conf')
   end
   
-  def get_mem_usage
-    begin
-      cmd = %x[free -t -m | egrep "buffers/cache" | awk '{print $3/($3+$4)}']
-      cmd.to_f
-    rescue
-      "Error"
-    end
-  end
-  
-  def get_load_average
-    cmd = %x[uptime | sed s/^.*averages\\:\\ //g]
-    cmd.strip
+  def get(metric)
+    cmd = %x[#{@conf.params[metric]}]
   end
 end
