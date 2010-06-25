@@ -23,8 +23,10 @@ class WatchTowerClient < Daemon::Base
       sleep 0.5
       #Log client start
       loop do
-        sleep @interval
+#        sleep @interval - we're using time to be as exact as we can
+        start = Time.now
         self.send_message_to_server(metric.get('cpu').to_f, metric.get('mem').to_f, metric.get('load'))
+        sleep (@interval - (Time.now - start))
       end
     end
   

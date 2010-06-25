@@ -2,10 +2,12 @@ require File.dirname(__FILE__) + '/../lib/daemon.rb'
 require File.dirname(__FILE__) + '/../lib/parseconfig.rb'
 require File.dirname(__FILE__) + '/../lib/max_queue.rb' #overwrite array to have max_size and push_safe
 require 'socket'
+require 'thread'
 
 class WatchTowerServer < Daemon::Base
   WorkingDirectory = File.expand_path(File.dirname(__FILE__))  
   @data = Array.new
+  @data_lock = Mutex.new
   @averages = Array.new
   @cluster_map = Hash.new
   #static methods
@@ -13,10 +15,12 @@ class WatchTowerServer < Daemon::Base
     attr_accessor :data, :averages
     
     def server_interval
+      @data_lock.lock
       @last = @latest
       @latest = Hash.new
       @averages.push_safe(average_data(@last))
-      @data.push_safe(@latest)
+      @data.push_safe(@latest) #if @last.size > 0
+      @data_lock.unlock
     end
     
     def average_data(last)
@@ -27,14 +31,11 @@ class WatchTowerServer < Daemon::Base
         metric_names.each do |metric_name|
           total_metric_value = 0
           cluster.each do |hostname, client|
-            @log.puts("Value for #{metric_name}/#{hostname} = #{client[metric_name]}")
             total_metric_value += client[metric_name].to_f
-            @log.puts("Total value = #{total_metric_value}")
           end
-          @log.puts("Total Value for #{metric_name}: #{total_metric_value}")
-          @log.flush
           average_metrics[metric_name] = total_metric_value / cluster.size
-          @log.puts("average: #{average_metrics[metric_name]}")
+          @log.puts("average #{metric_name} of #{cluster.size}: #{average_metrics[metric_name]}")
+          @log.flush
         end
         clusters[clustername] = average_metrics
       end
@@ -63,11 +64,13 @@ class WatchTowerServer < Daemon::Base
       #spawn a thread to run on an interval
       @latest = Hash.new
       @server_interval_thread = Thread.new {
+        sleep @interval
         while true
-          sleep @interval
+          start = Time.now
           if @sockets.size > 1
             server_interval()
           end
+          sleep (@interval - (Time.now - start))
         end
       }
       
@@ -103,11 +106,13 @@ class WatchTowerServer < Daemon::Base
             case type
             when "data"
               log.puts "Got data - #{@cluster_map[socket.peeraddr[2]]} - #{input.join('|')}"
+              @data_lock.lock
               @latest[@cluster_map[socket.peeraddr[2]]] ||= Hash.new
               @latest[@cluster_map[socket.peeraddr[2]]][socket.peeraddr[2]] = Hash.new
               @latest[@cluster_map[socket.peeraddr[2]]][socket.peeraddr[2]]['cpu'] = input[0]
               @latest[@cluster_map[socket.peeraddr[2]]][socket.peeraddr[2]]['mem'] = input[1]
               @latest[@cluster_map[socket.peeraddr[2]]][socket.peeraddr[2]]['load'] = input[2].split(" ")[0]              
+              @data_lock.unlock
               log.puts "I got #{input.join('|')} from #{@cluster_map[socket.peeraddr[2]]}-#{socket.peeraddr[2]} #{@data.size}"
             when "info"
               log.puts "I got #{input[0]} from #{socket.peeraddr[2]}"
