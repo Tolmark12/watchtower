@@ -5,22 +5,74 @@ require 'socket'
 
 class WatchTowerServer < Daemon::Base
   WorkingDirectory = File.expand_path(File.dirname(__FILE__))  
-  @data = Hash.new
+  @data = Array.new
+  @averages = Array.new
+  @cluster_map = Hash.new
   #static methods
   class << self
+    attr_accessor :data, :averages
+    
+    def server_interval
+      @last = @latest
+      @latest = Hash.new
+      @averages.push_safe(average_data(@last))
+      @data.push_safe(@latest)
+    end
+    
+    def average_data(last)
+      clusters = Hash.new
+      last.each do |clustername, cluster|
+        metric_names = cluster[cluster.keys[0]].keys
+        average_metrics = Hash.new
+        metric_names.each do |metric_name|
+          total_metric_value = 0
+          cluster.each do |hostname, client|
+            @log.puts("Value for #{metric_name}/#{hostname} = #{client[metric_name]}")
+            total_metric_value += client[metric_name].to_f
+            @log.puts("Total value = #{total_metric_value}")
+          end
+          @log.puts("Total Value for #{metric_name}: #{total_metric_value}")
+          @log.flush
+          average_metrics[metric_name] = total_metric_value / cluster.size
+          @log.puts("average: #{average_metrics[metric_name]}")
+        end
+        clusters[clustername] = average_metrics
+      end
+      return clusters
+    end
+    
     def start
+      @averages.max_size = 100
+      @data.max_size = 100
+      
       conf = ParseConfig.new(WorkingDirectory + '/../etc/server.conf')
       port = conf.params['server_port']
+      @interval = conf.params['interval'].to_i
+      @interval = 5 if @interval == 0
+
       max_size = conf.params['max_size'].to_i
       if (max_size == 0)
         max_size = 100
       end
-        
+      
       @listener = TCPServer.open(port)
       @sockets = [@listener]
+      @log = STDOUT
       log = STDOUT
+      
+      #spawn a thread to run on an interval
+      @latest = Hash.new
+      @server_interval_thread = Thread.new {
+        while true
+          sleep @interval
+          if @sockets.size > 1
+            server_interval()
+          end
+        end
+      }
+      
+      # listen for connections
       while true
-        # listen for connections
         ready = select(@sockets)
         readable = ready[0]
         
@@ -29,17 +81,15 @@ class WatchTowerServer < Daemon::Base
           if socket == @listener
             client = @listener.accept
             @sockets << client
-            @data[client.peeraddr[2]] = Array.new
-            @data[client.peeraddr[2]].max_size = max_size
-            client.puts "Welcome"
-            log.puts "Accepted connection from #{client.peeraddr[2]}"
+            client.puts "interval|#{@interval}"
+            log.puts "Accepted connection from #{client.peeraddr[2]} I sent them interval|#{@interval}"
           else
             #   per thread - listen for data
             input = socket.gets
             
             if !input
               log.puts "Client on #{socket.peeraddr[2]} disconnected."
-              @data.delete(socket.peeraddr[2])
+              #@data[@cluster_map[socket.peeraddr[2]]].delete(socket.peeraddr[2])
               @sockets.delete(socket)
               socket.close
               next
@@ -52,9 +102,24 @@ class WatchTowerServer < Daemon::Base
             input.shift
             case type
             when "data"
-              @data[socket.peeraddr[2]].push_safe(input)
-              log.puts "I got #{input.join('|')} from #{socket.peeraddr[2]} and have #{@data[socket.peeraddr[2]].size} data elements for this one"
+              log.puts "Got data - #{@cluster_map[socket.peeraddr[2]]} - #{input.join('|')}"
+              @latest[@cluster_map[socket.peeraddr[2]]] ||= Hash.new
+              @latest[@cluster_map[socket.peeraddr[2]]][socket.peeraddr[2]] = Hash.new
+              @latest[@cluster_map[socket.peeraddr[2]]][socket.peeraddr[2]]['cpu'] = input[0]
+              @latest[@cluster_map[socket.peeraddr[2]]][socket.peeraddr[2]]['mem'] = input[1]
+              @latest[@cluster_map[socket.peeraddr[2]]][socket.peeraddr[2]]['load'] = input[2].split(" ")[0]              
+              log.puts "I got #{input.join('|')} from #{@cluster_map[socket.peeraddr[2]]}-#{socket.peeraddr[2]} #{@data.size}"
             when "info"
+              log.puts "I got #{input[0]} from #{socket.peeraddr[2]}"
+              log.flush
+              if (input[0] == nil || input[0] == "")
+                input[0] = "default"
+              end
+              
+#              @latest[input[0]][socket.peeraddr[2]] = Array.new
+#              @latest[input[0]][socket.peeraddr[2]].max_size = max_size
+              log.puts "@cluster_map[#{socket.peeraddr[2]} = #{input[0]}]"
+              @cluster_map[socket.peeraddr[2]] = input[0]
               log.puts "I got info from #{socket.peeraddr[2]}"
             end  
             
@@ -68,12 +133,7 @@ class WatchTowerServer < Daemon::Base
     end
     
     def stop
-      #tell all the connections to die
-#      @sockets.each do |socket|
-#        socket.puts("shutdown")
-#        socket.close
-#      end
-      @listener.close
+      @listener.close #doing this will automatically close all the sockets
     end
   end
 

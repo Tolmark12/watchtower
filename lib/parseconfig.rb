@@ -20,8 +20,6 @@
 
 class ParseConfig
   
-  Version = '0.5.2'
-
   attr_accessor :config_file, :params, :groups
 
   # Initialize the class with the path to the 'config_file'

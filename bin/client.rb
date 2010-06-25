@@ -13,18 +13,18 @@ class WatchTowerClient < Daemon::Base
     def start
       conf = ParseConfig.new(WorkingDirectory + '/../etc/client.conf')
       metric = Metrics.new
-
       #read in configuration items
-      interval = conf.params['interval'].to_i
-      interval = 5 if interval == 0
+      @interval = 1
       server_ip = conf.params['server_ip']
       server_port = conf.params['server_port']
+      cluster = conf.params['cluster']
       
-      self.connect_to_server(server_ip, server_port)
+      self.connect_to_server(server_ip, server_port, cluster)
+      sleep 0.5
       #Log client start
       loop do
-        sleep interval
-        self.send_message_to_server(metric.get_cpu_usage, metric.get_mem_usage, metric.get_load_average)
+        sleep @interval
+        self.send_message_to_server(metric.get('cpu').to_f, metric.get('mem').to_f, metric.get('load'))
       end
     end
   
@@ -32,7 +32,7 @@ class WatchTowerClient < Daemon::Base
       self.disconnect_from_server
     end
     
-    def connect_to_server(server_ip, server_port)
+    def connect_to_server(server_ip, server_port, cluster)
       @socket = TCPSocket.open(server_ip,server_port)
       
       #listener listens to the server, can listen for certain messages
@@ -46,12 +46,21 @@ class WatchTowerClient < Daemon::Base
             WatchTowerClient.kill_self
             break
           end
-          @log.puts "Message from server #{line}"
+          line = line.split("|")
+          type = line[0]
+          line.shift
+          
+          if type == 'interval'
+            @interval = line[0].to_i
+            @log.puts "Got #{@interval} interval from server"
+            @interval = 5 if @interval == 0
+          else
+            @log.puts "Message from server #{type} -- #{line}"
+          end
         end
       }
       
-      # send info about this client to the server # of cpu's etc
-      @socket.puts "info|1|123"
+      @socket.puts "info|#{cluster}"
       @log.puts "===START=== #{server_ip}: #{server_port}"
       @log.flush
     end
