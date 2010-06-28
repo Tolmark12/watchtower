@@ -26,7 +26,12 @@ class WatchTowerClient < Daemon::Base
 #        sleep @interval - we're using time to be as exact as we can
         start = Time.now
         self.send_message_to_server(metric.get('cpu').to_f, metric.get('mem').to_f, metric.get('load'))
-        sleep (@interval - (Time.now - start))
+        newinterval = @interval - (Time.now - start)
+        while newinterval <= 0
+          @log.puts "Missed a beat by #{newinterval} seconds"
+          newinterval += @interval
+        end
+        sleep (newinterval)
       end
     end
   
