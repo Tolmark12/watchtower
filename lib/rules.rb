@@ -21,11 +21,11 @@ class Rule
       @value = string[3].to_i
       if string[4] == "for"
         @threshold = string[5].to_i
-        @method_name = string[7]
+        @action = string[7]
         @and_wait = string[10].to_i 
       else
         @threshold = 1
-        @method_name = string[5]
+        @action = string[5]
         @and_wait = string[8].to_i
       end
       @check_in = @threshold
@@ -44,7 +44,7 @@ class Rule
     end
   end
   
-  def check_rule(data, cluster, actionObject)
+  def check_rule(data, cluster)
     log = STDOUT
     pointer = data.size - 1
     count = @threshold
@@ -60,7 +60,8 @@ class Rule
     # at this point, either it found enough, or not
     if count == 0
       # if it found enough: fire off method and reset threshold
-      actionObject.send(@method_name, @rule_name)
+      # actionObject.send(@method_name, @rule_name)
+      eval "#{@action}"
       
       @check_in = @and_wait
     else

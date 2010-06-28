@@ -1,3 +1,4 @@
+#!/usr/bin/env ruby
 require File.dirname(__FILE__) + '/../lib/daemon.rb'
 require File.dirname(__FILE__) + '/../lib/parseconfig.rb'
 require File.dirname(__FILE__) + '/../lib/rules.rb'
@@ -5,6 +6,9 @@ require File.dirname(__FILE__) + '/../lib/actions.rb'
 require File.dirname(__FILE__) + '/../lib/max_queue.rb' #overwrite array to have max_size and push_safe
 require 'socket'
 require 'thread'
+
+# Boilerplate to allow custom ruby functionality if they are able
+require File.dirname(__FILE__) + '/init.rb' if File.exists? File.dirname(__FILE__) + '/init.rb'
 
 class WatchTowerServer < Daemon::Base
   WorkingDirectory = File.expand_path(File.dirname(__FILE__))  
@@ -33,7 +37,7 @@ class WatchTowerServer < Daemon::Base
           if (rule.decrement_check_in == true)
             @rules_lock
               #check the rule, which will fire it on Actions if it's met
-              rule.check_rule(@averages, cluster, Actions)
+              rule.check_rule(@averages, cluster)
             @rules_unlock
           end
         end
