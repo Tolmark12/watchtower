@@ -1,5 +1,7 @@
 require File.dirname(__FILE__) + '/../lib/daemon.rb'
 require File.dirname(__FILE__) + '/../lib/parseconfig.rb'
+require File.dirname(__FILE__) + '/../lib/rules.rb'
+require File.dirname(__FILE__) + '/../lib/actions.rb'
 require File.dirname(__FILE__) + '/../lib/max_queue.rb' #overwrite array to have max_size and push_safe
 require 'socket'
 require 'thread'
@@ -9,6 +11,7 @@ class WatchTowerServer < Daemon::Base
   @data = Array.new
   @data_lock = Mutex.new
   @listener_lock = Mutex.new
+  @rules_lock = Mutex.new
   @averages = Array.new
   @cluster_map = Hash.new
   #static methods
@@ -22,6 +25,19 @@ class WatchTowerServer < Daemon::Base
       @averages.push_safe(average_data(@last))
       @data.push_safe(@latest) #if @last.size > 0
       @data_lock.unlock
+      
+      #for each cluster
+      @averages[0].keys.each do |cluster|
+        #check to see if u decrement check in it reaches 0 (returns 1 for true)
+        @rules.each do |rule|
+          if (rule.decrement_check_in == true)
+            @rules_lock
+              #check the rule, which will fire it on Actions if it's met
+              rule.check_rule(@averages, cluster, Actions)
+            @rules_unlock
+          end
+        end
+      end
     end
     
     def average_data(last)
@@ -58,7 +74,6 @@ class WatchTowerServer < Daemon::Base
         input.shift
         case type
         when "data"
-          @log.puts "Got data - #{@cluster_map[socket.peeraddr[2]]} - #{input.join('|')}"
           @data_lock.lock
           @latest[@cluster_map[socket.peeraddr[2]]] ||= Hash.new
           @latest[@cluster_map[socket.peeraddr[2]]][socket.peeraddr[2]] = Hash.new
@@ -93,6 +108,7 @@ class WatchTowerServer < Daemon::Base
       @data.max_size = 100
       
       conf = ParseConfig.new(WorkingDirectory + '/../etc/server.conf')
+      @rules = Rule.read_in_rules(WorkingDirectory + '/../etc/rules.conf')
       port = conf.params['server_port']
       @interval = conf.params['interval'].to_i
       @interval = 5 if @interval == 0
