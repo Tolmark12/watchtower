@@ -116,7 +116,12 @@ class WatchTowerServer < Daemon::Base
           if @sockets.size > 0
             server_interval()
           end
-          sleep (@interval - (Time.now - start))
+          newinterval = @interval - (Time.now - start)
+          while newinterval <= 0
+            @log.puts "Missed a beat by #{newinterval} seconds"
+            newinterval += @interval
+          end
+          sleep (newinterval)
         end
       }
       
