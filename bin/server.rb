@@ -8,6 +8,7 @@ class WatchTowerServer < Daemon::Base
   WorkingDirectory = File.expand_path(File.dirname(__FILE__))  
   @data = Array.new
   @data_lock = Mutex.new
+  @listener_lock = Mutex.new
   @averages = Array.new
   @cluster_map = Hash.new
   #static methods
@@ -41,6 +42,51 @@ class WatchTowerServer < Daemon::Base
       end
       return clusters
     end
+
+    def handle_client(socket)
+      while true
+        input = socket.gets
+
+        if !input
+          break
+        end
+
+        input.chop!
+        #     on data - split on |
+        input = input.split("|")
+        type = input[0]
+        input.shift
+        case type
+        when "data"
+          @log.puts "Got data - #{@cluster_map[socket.peeraddr[2]]} - #{input.join('|')}"
+          @data_lock.lock
+          @latest[@cluster_map[socket.peeraddr[2]]] ||= Hash.new
+          @latest[@cluster_map[socket.peeraddr[2]]][socket.peeraddr[2]] = Hash.new
+          @latest[@cluster_map[socket.peeraddr[2]]][socket.peeraddr[2]]['cpu'] = input[0]
+          @latest[@cluster_map[socket.peeraddr[2]]][socket.peeraddr[2]]['mem'] = input[1]
+          @latest[@cluster_map[socket.peeraddr[2]]][socket.peeraddr[2]]['load'] = input[2].split(" ")[0]              
+          @data_lock.unlock
+          @log.puts "I got #{input.join('|')} from #{@cluster_map[socket.peeraddr[2]]}-#{socket.peeraddr[2]} #{@data.size}"
+        when "info"
+          @log.puts "I got #{input[0]} from #{socket.peeraddr[2]}"
+          @log.flush
+          if (input[0] == nil || input[0] == "")
+            input[0] = "default"
+          end
+
+          @log.puts "@cluster_map[#{socket.peeraddr[2]} = #{input[0]}]"
+          @cluster_map[socket.peeraddr[2]] = input[0]
+          @log.puts "I got info from #{socket.peeraddr[2]}"
+        end
+      end
+      
+      #after the client disconnects
+      @log.puts "Client on #{socket.peeraddr[2]} disconnected."
+      @listener_lock.lock
+        @sockets.delete(socket)
+      @listener_lock.unlock
+      socket.close
+    end
     
     def start
       @averages.max_size = 100
@@ -57,7 +103,7 @@ class WatchTowerServer < Daemon::Base
       end
       
       @listener = TCPServer.open(port)
-      @sockets = [@listener]
+      @sockets = []
       @log = STDOUT
       log = STDOUT
       
@@ -67,7 +113,7 @@ class WatchTowerServer < Daemon::Base
         sleep @interval
         while true
           start = Time.now
-          if @sockets.size > 1
+          if @sockets.size > 0
             server_interval()
           end
           sleep (@interval - (Time.now - start))
@@ -76,65 +122,16 @@ class WatchTowerServer < Daemon::Base
       
       # listen for connections
       while true
-        ready = select(@sockets)
-        readable = ready[0]
-        
-        readable.each do |socket|
-          # on connection - create thread
-          if socket == @listener
-            client = @listener.accept
-            @sockets << client
-            client.puts "interval|#{@interval}"
-            log.puts "Accepted connection from #{client.peeraddr[2]} I sent them interval|#{@interval}"
-          else
-            #   per thread - listen for data
-            input = socket.gets
-            
-            if !input
-              log.puts "Client on #{socket.peeraddr[2]} disconnected."
-              #@data[@cluster_map[socket.peeraddr[2]]].delete(socket.peeraddr[2])
-              @sockets.delete(socket)
-              socket.close
-              next
-            end
-            
-            input.chop!
-            #     on data - split on |
-            input = input.split("|")
-            type = input[0]
-            input.shift
-            case type
-            when "data"
-              log.puts "Got data - #{@cluster_map[socket.peeraddr[2]]} - #{input.join('|')}"
-              @data_lock.lock
-              @latest[@cluster_map[socket.peeraddr[2]]] ||= Hash.new
-              @latest[@cluster_map[socket.peeraddr[2]]][socket.peeraddr[2]] = Hash.new
-              @latest[@cluster_map[socket.peeraddr[2]]][socket.peeraddr[2]]['cpu'] = input[0]
-              @latest[@cluster_map[socket.peeraddr[2]]][socket.peeraddr[2]]['mem'] = input[1]
-              @latest[@cluster_map[socket.peeraddr[2]]][socket.peeraddr[2]]['load'] = input[2].split(" ")[0]              
-              @data_lock.unlock
-              log.puts "I got #{input.join('|')} from #{@cluster_map[socket.peeraddr[2]]}-#{socket.peeraddr[2]} #{@data.size}"
-            when "info"
-              log.puts "I got #{input[0]} from #{socket.peeraddr[2]}"
-              log.flush
-              if (input[0] == nil || input[0] == "")
-                input[0] = "default"
-              end
-              
-#              @latest[input[0]][socket.peeraddr[2]] = Array.new
-#              @latest[input[0]][socket.peeraddr[2]].max_size = max_size
-              log.puts "@cluster_map[#{socket.peeraddr[2]} = #{input[0]}]"
-              @cluster_map[socket.peeraddr[2]] = input[0]
-              log.puts "I got info from #{socket.peeraddr[2]}"
-            end  
-            
-            #     if data is first, then output "to database - blah"
-            #     if info is first, then output "info from the client - blah"
-            #     if stop is first, then output "goodbye dear PID", kill thread and close socket.
-            
-          end
+        client = @listener.accept
+        Thread.start(client) do |c|
+          @listener_lock.lock
+          @sockets << c
+          @listener_lock.unlock
+          c.puts "interval|#{@interval}"
+          handle_client(c)
+          log.puts "Accepted connection from #{client.peeraddr[2]} I sent them interval|#{@interval}"
         end
-      end
+      end        
     end
     
     def stop
