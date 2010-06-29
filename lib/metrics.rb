@@ -6,7 +6,12 @@ class Metrics
     @conf = ParseConfig.new(WorkingDirectory + '/../etc/metrics.conf')
   end
   
-  def get(metric)
-    cmd = %x[#{@conf.params[metric]}]
+  def get(metric, group = "")
+    if (group == "")
+      cmd = @conf.params['default'][metric]
+    else
+      cmd = @conf.params[group][metric]
+    end
   end
+    
 end

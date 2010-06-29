@@ -2,7 +2,7 @@
 require File.dirname(__FILE__) + '/../lib/daemon.rb'
 require File.dirname(__FILE__) + '/../lib/parseconfig.rb'
 require File.dirname(__FILE__) + '/../lib/rules.rb'
-require File.dirname(__FILE__) + '/../lib/actions.rb'
+require File.dirname(__FILE__) + '/../lib/metrics.rb'
 require File.dirname(__FILE__) + '/../lib/max_queue.rb' #overwrite array to have max_size and push_safe
 require 'socket'
 require 'thread'
@@ -26,10 +26,15 @@ class WatchTowerServer < Daemon::Base
       @data_lock.lock
       @last = @latest
       @latest = Hash.new
+      
       @averages.push_safe(average_data(@last))
+      if @averages[0].size == 0
+        @averages.pop
+        @data_lock.unlock
+        return
+      end
       @data.push_safe(@latest) #if @last.size > 0
       @data_lock.unlock
-      
       #for each cluster
       @averages[0].keys.each do |cluster|
         #check to see if u decrement check in it reaches 0 (returns 1 for true)
@@ -46,8 +51,11 @@ class WatchTowerServer < Daemon::Base
     
     def average_data(last)
       clusters = Hash.new
+      string = "average "
+      size = 0
       last.each do |clustername, cluster|
-        metric_names = cluster[cluster.keys[0]].keys
+        metric_names = get_clusters_metrics(clustername)
+        puts "Metric names for #{clustername} = #{metric_names.join(',')}"
         average_metrics = Hash.new
         metric_names.each do |metric_name|
           total_metric_value = 0
@@ -55,14 +63,41 @@ class WatchTowerServer < Daemon::Base
             total_metric_value += client[metric_name].to_f
           end
           average_metrics[metric_name] = total_metric_value / cluster.size
-          @log.puts("average #{metric_name} of #{cluster.size}: #{average_metrics[metric_name]}")
+          string = string + "#{metric_name}: #{average_metrics[metric_name]}, "
+          size = cluster.size
           @log.flush
         end
         clusters[clustername] = average_metrics
       end
+      puts "#{string} with #{size} clients"
+      
       return clusters
     end
 
+    def get_clusters_metrics(cluster)
+      if Rule.clusters_rules[cluster] == nil
+        cluster_rules = []
+      else
+        cluster_rules = Rule.clusters_rules[cluster]
+      end
+      if Rule.clusters_rules['all'] == nil
+        clusters_rules_all = []
+      else
+        clusters_rules_all = Rule.clusters_rules['all']
+      end
+      metrics = cluster_rules + clusters_rules_all      
+    end
+
+    def get_metrics_for_client(client_type, metrics)
+      metric_lines = Array.new
+      metrics.each do |metric_name|
+        puts "Looking up #{client_type} sub #{metric_name}"
+        puts "Found #{@metrics.params[client_type][metric_name]}"
+        metric_lines << @metrics.params[client_type][metric_name]
+      end      
+      metric_lines
+    end
+    
     def handle_client(socket)
       while true
         input = socket.gets
@@ -81,9 +116,14 @@ class WatchTowerServer < Daemon::Base
           @data_lock.lock
           @latest[@cluster_map[socket.peeraddr[2]]] ||= Hash.new
           @latest[@cluster_map[socket.peeraddr[2]]][socket.peeraddr[2]] = Hash.new
-          @latest[@cluster_map[socket.peeraddr[2]]][socket.peeraddr[2]]['cpu'] = input[0]
-          @latest[@cluster_map[socket.peeraddr[2]]][socket.peeraddr[2]]['mem'] = input[1]
-          @latest[@cluster_map[socket.peeraddr[2]]][socket.peeraddr[2]]['load'] = input[2].split(" ")[0]              
+          i = 0
+          @client_metrics[socket.peeraddr[2]].each do |metric|
+            @latest[@cluster_map[socket.peeraddr[2]]][socket.peeraddr[2]][metric] = input[i]
+            puts "Got metric #{metric} = #{input[i]}"
+            i = i + 1
+          end
+#          @latest[@cluster_map[socket.peeraddr[2]]][socket.peeraddr[2]]['mem'] = input[1]
+#          @latest[@cluster_map[socket.peeraddr[2]]][socket.peeraddr[2]]['load'] = input[2]
           @data_lock.unlock
           @log.puts "I got #{input.join('|')} from #{@cluster_map[socket.peeraddr[2]]}-#{socket.peeraddr[2]} #{@data.size}"
         when "info"
@@ -92,8 +132,21 @@ class WatchTowerServer < Daemon::Base
           if (input[0] == nil || input[0] == "")
             input[0] = "default"
           end
-
-          @log.puts "@cluster_map[#{socket.peeraddr[2]} = #{input[0]}]"
+          if (input[1] == nil || input[1] == "")
+            input[1] = "default"
+          end
+          
+          metrics = get_clusters_metrics(input[0])
+          @client_metrics ||= Hash.new
+          @client_metrics[socket.peeraddr[2]] = metrics
+          metric_lines = get_metrics_for_client(input[1], metrics)
+          if metrics.size > 0
+            socket.puts "info-$-#{@interval}-$-#{metric_lines.join("-$$-")}"
+            @log.puts "Sending #{metric_lines.join('\/')}"
+          else
+            socket.puts "error-$-There are no rules setup yet for your cluster"
+            @log.puts "Error"
+          end
           @cluster_map[socket.peeraddr[2]] = input[0]
           @log.puts "I got info from #{socket.peeraddr[2]}"
         end
@@ -112,6 +165,7 @@ class WatchTowerServer < Daemon::Base
       @data.max_size = 100
       
       conf = ParseConfig.new(WorkingDirectory + '/../etc/server.conf')
+      @metrics = ParseConfig.new(WorkingDirectory + '/../etc/metrics.conf')
       @rules = Rule.read_in_rules(WorkingDirectory + '/../etc/rules.conf')
       port = conf.params['server_port']
       @interval = conf.params['interval'].to_i
@@ -152,9 +206,8 @@ class WatchTowerServer < Daemon::Base
           @listener_lock.lock
           @sockets << c
           @listener_lock.unlock
-          c.puts "interval|#{@interval}"
-          handle_client(c)
           log.puts "Accepted connection from #{client.peeraddr[2]} I sent them interval|#{@interval}"
+          handle_client(c)
         end
       end        
     end
@@ -167,4 +220,5 @@ class WatchTowerServer < Daemon::Base
   #instance methods go here
 end
 
+Thread.abort_on_exception = true
 WatchTowerServer.daemonize
