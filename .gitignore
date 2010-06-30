@@ -4,3 +4,5 @@ lib/.DS_Store
 bin/.DS_Store
 conf/.DS_Store
 etc/.DS_Store
+.idea/*
+.idea
