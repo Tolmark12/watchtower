@@ -12,7 +12,7 @@ module WatchTower
       def get_rules_for_cluster(cluster_name)
         rules = []
         metric_names = []
-
+        health_intervals = []
         @@file_lock.lock
         open(@@file_name).each do |line|
           line.strip!
@@ -20,7 +20,7 @@ module WatchTower
             unless (/^\#/.match(line))
               #verify that this rule works for this cluster
               regex =
-              line.scan(/^([a-z_]+ if [a-z]+ )(.*?)is(.*)/) {|worthless, clusters, worthless|
+              line.scan(/^([a-z_]+ if [a-z_]+ )(.*?)is(.*)/) {|worthless, clusters, worthless|
                 clusters.slice!("of ")
                 clusters.strip!
                 cluster_array = clusters.split(" or ")
@@ -48,11 +48,11 @@ module WatchTower
 
     def initialize(rule, cluster_name)
       @error = STDOUT
-      regex = /^([a-z_]+) if ([a-z]+) .*is ([>=<]+) ([0-9]+) for ([0-9]+) intervals then (call|run|log) (.*) and wait ([0-9]+) intervals/
+      regex = /^([a-z_]+) if ([a-z_]+) .*is ([>=<]+) ([0-9]+) for ([0-9]+) intervals then (call|run|log) (.*) and wait ([0-9]+) intervals/
       if rule =~ regex
         rule.scan(regex) {|name, metric, operator, value, threshold, action_type, action, wait_interval|
           @rule_name = name
-          @metric = metric
+          @metric = metric          
           @operator = operator
           @value = value.to_i
           @cluster = cluster_name  #we know which cluster it belongs too :)
@@ -95,22 +95,36 @@ module WatchTower
         # if it found enough: fire off method and reset threshold
         # actionObject.send(@method_name, @rule_name)
         puts "Firing rule #{@rule_name} for cluster #{@cluster}"
-        begin
-          case @action_type
-          when "run"
-            system(@action)
-          when "call"
-            eval "#{@action}"
-          when "log"
-            log.puts @action
-          end
-        rescue
-          puts "Error: rule #{@rule_name}'s action is invalid"
-        end
+        do_action @action_type, @action
         @check_in = @wait_interval
       else
         # if it didn't find enough, then we want to wait as many more as are required (if it found 2 of 5, then we should check in 3 to see if all 5 met the rule)
         @check_in = count
+      end
+    end
+
+    def do_action(type, action)
+      begin
+        case type
+        when "run"
+          system(action)
+        when "call"
+          eval "#{action}"
+        when "log"
+          puts action
+        end
+      rescue
+        puts "Error: rule #{@rule_name}'s action is invalid"
+      end
+    end
+
+    def check_health(health, node_name)
+      if health >= @threshold
+          tmp_action = @action.gsub(/node_name/, node_name)
+          do_action @action_type, tmp_action
+          return @wait_interval
+      else
+        return 0
       end
     end
 
